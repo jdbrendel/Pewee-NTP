@@ -7,7 +7,8 @@ import numpy as np
 # # # ~ ~ ~ MATERIALS ~ ~ ~ # # #
 #################################
 
-
+# Fuel should be more like TRISO, approx for now
+# 9 Control drums
 fuel = openmc.Material(1, "fuel")
 
 fuel.add_nuclide('U235', 0.93)
@@ -158,7 +159,7 @@ assembly_lattice.pitch = (cell_edge_length*np.sqrt(3),)
 #assembly_lattice.orientation = 'x'
 #assembly_lattice.outer = fuel_element_universe
 assembly_lattice.outer = graphite_universe
-rings = 14
+rings = 16
 
 universes = []
 
@@ -168,6 +169,8 @@ for ring in range(rings, 0, -1):
         
         if (ring == 14):
             ring_univs.append(fuel_element_universe)
+        elif (ring == 16):
+                    ring_univs.append(fuel_element_universe)
         elif (pos % 2 == 0) and (ring % 2 == 0):
             ring_univs.append(support_universe)
         #elif (pos % 1 == 0) and (ring == 13):
@@ -190,16 +193,61 @@ assembly_lattice.universes = [ring1, center]
 '''
 
 
-assembly_hex = openmc.model.HexagonalPrism(
-    edge_length = cell_edge_length*12.5*2,  # bigger than single element
-    orientation='x',
-    boundary_type='vacuum'
-)
+# # # Dodecahedrom Bounding # # #
 
+s_edge = 8 * cell_edge_length
+r_flat = 12.5 * np.sqrt(3) * cell_edge_length
+r_vertex = np.sqrt(r_flat**2 + (s_edge / 2)**2)
+theta_vertex = np.arctan((s_edge / 2) / r_flat)
+r_corner = r_vertex * np.cos(np.radians(30) - theta_vertex)
+
+# Array to hold the bounding half-spaces of the dodecagon
+planes = []
+
+# Define planes for the 6 short edges
+for i in range(6):
+    angle = np.radians(60 * i+30)
+    A = np.cos(angle)
+    B = np.sin(angle)
+    # Surface equation: A*x + B*y - r_flat = 0
+    p = openmc.Plane(a=A, b=B, c=0.0, d=r_flat)
+    planes.append(-p)  # Keep the interior region (negative half-space)
+
+# Define planes for the 6 connecting long edges
+for i in range(6):
+    angle = np.radians(60 * i )
+    A = np.cos(angle)
+    B = np.sin(angle)
+    p = openmc.Plane(a=A, b=B, c=0.0, d=r_corner)
+    planes.append(-p)
+
+# Intersect all 12 plane half-spaces to form the solid dodecagon region
+assembly_dodec = planes[0]
+for p in planes[1:]:
+    assembly_dodec &= p
+
+# Apply boundary conditions to all outer surfaces
+for p in planes:
+    # Extract the surface object from the half-space expression
+    p.surface.boundary_type = 'vacuum'
+
+dodec_2d = planes[0]
+for p in planes[1:]:
+    dodec_2d &= p
+
+# # # Reflector # # #
+
+r_ref = 47.47 # cm
+r_reflector = openmc.ZCylinder(r=r_ref)
+reflector_cell = openmc.Cell(fill=graphite, region=~dodec_2d & -r_reflector)
+
+# Assembling Fuel into Dodecahedron
 assembly_cell = openmc.Cell(fill=assembly_lattice,
-                            region=-assembly_hex & +min_z & -max_z)
+                            region=assembly_dodec & +min_z & -max_z)
 
-geometry = openmc.Geometry([assembly_cell])
+reactor_universe = openmc.Universe(cells=[assembly_cell, reflector_cell])
+
+geometry = openmc.Geometry(reactor_universe)
 geometry.export_to_xml()
 
 
@@ -215,8 +263,8 @@ mcolors = {
 plot1 = openmc.Plot()
 plot1.filename = 'Core_Loading_CS_xy'
 plot1.origin = (0, 0, reactor_height/2)
-plot1.width = (cell_edge_length*60, cell_edge_length*60)
-plot1.pixels = (5000, 5000)
+plot1.width = (100, 100)
+plot1.pixels = (6000, 6000)
 plot1.color_by = 'material'
 plot1.colors = mcolors
 '''
@@ -244,7 +292,7 @@ plot3.colors   = mcolors
 plot4 = openmc.Plot()
 plot4.filename = 'Core_Loading_CS_xy_CellColor'
 plot4.origin = (0, 0, reactor_height/2)
-plot4.width = (cell_edge_length*60, cell_edge_length*60)
+plot4.width = (100, 100)
 plot4.pixels = (5000, 5000)
 plot4.color_by = 'cell'
 
